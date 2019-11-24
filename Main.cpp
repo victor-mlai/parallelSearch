@@ -1,199 +1,147 @@
 #define _CRT_SECURE_NO_WARNINGS
 
-#include <vector>
 #include <omp.h>
 #include <time.h>
+#include <vector>
+#include <array>
 #include <iostream>
+#include <random>	// used to generate random values to be searched
+#include <functional>	// std::bind
+#include <numeric>      // std::iota
+
+#include "SearchAlgorithms.h"
+
+#define USING_CHRONO_TO_MEASURE_DURATION
+
+#ifdef USING_CHRONO_TO_MEASURE_DURATION
+
 #include <chrono>
-
-constexpr unsigned long long N = 1'299'000'000;
-
-/*
-val = 7
-                     P1               P2         
-arr = 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14
-c = right            ?                ?           left
-
-after the first while:
-					 P1               P2
-arr = 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14
-c = right            right            left        left
-                     ^                ^
-   					these 2 are different
-thrdPos[P1] = 6
-thrdPos[P2] = 11
-=> l = 6, r = 10;
-
-	     P1       P2 
-arr = 6  7  8  9  10 11
-
-=> P1 will find the value at index 7
-*/
-template<typename VecType, typename VecSizeT = unsigned long long>
-VecSizeT parallelSearch(const std::vector<VecType>& arr, VecType val)
-{
-	VecSizeT l = 0;	// left most index
-	VecSizeT r = N - 1; // right most index
-
-	enum state { left = -1, right = 1 };
-	VecSizeT threadCount = omp_get_max_threads();
-
-	// each thread will tell if "val" is to their "left" or to their "right"
-	std::vector<state> dirToVal(threadCount + 2); // + 2 <=> the 2 borders
-
-	dirToVal[0] = right;	// left border 
-	dirToVal[threadCount+1] = left;
-
-	//int g = (int)ceil(log2(N + 1) / log2(p + 1));	// nr pasi <=> complexity O(g)
-
-	std::vector<VecSizeT> thrdPos(threadCount);	// position for each thread
-
-	VecSizeT index = -1;
-	VecSizeT temp_index = -1;
-
-	#pragma omp parallel shared(l, r, threadCount, index, temp_index)
-	{
-		VecSizeT thrdID = omp_get_thread_num();
-		//printf("Number of threads: %d\n", omp_get_max_threads());
-
-		while (l <= r && index == -1)
-		{
-			VecSizeT segm_size = (r - l + 1) / (threadCount + 1) + 1;
-			thrdPos[thrdID] = l + (thrdID + 1) * segm_size - 1;
-
-			if (thrdPos[thrdID] > r)
-			{
-				dirToVal[thrdID + 1] = left;
-			}
-			else
-			{
-				if (arr[thrdPos[thrdID]] == val)
-				{
-					temp_index = thrdPos[thrdID];
-				}
-				else if (arr[thrdPos[thrdID]] < val)
-				{
-					dirToVal[thrdID + 1] = right;
-				}
-				else
-				{
-					dirToVal[thrdID + 1] = left;
-				}
-			}
-
-			#pragma omp barrier
-
-			#pragma omp single
-			{
-				index = temp_index;
-			}
-
-			if (dirToVal[thrdID] != dirToVal[thrdID + 1])
-			{
-				r = thrdPos[thrdID] - 1;
-				if (thrdID != 0)
-				{
-					l = thrdPos[thrdID - 1] + 1;
-				}
-			}
-
-			#pragma omp single
-			{
-				if (dirToVal[threadCount] != dirToVal[threadCount + 1])
-				{
-					l = thrdPos[threadCount - 1] + 1;
-				}
-			}
-		}
-	}
-
-	return index;
-}
-
-template<typename VecType, typename VecSizeT = unsigned long long>
-VecSizeT binarySearch(const std::vector<VecType>& arr, VecType val)
-{
-	VecSizeT l = 0, r = N - 1;
-	VecSizeT m;
-	while (l <= r)
-	{
-		m = l + (r - l) / 2;
-		if (arr[m] <= val)
-		{
-			l = m + 1;
-		}
-		else
-		{
-			r = m - 1;
-		}
-	}
-
-	return r;
-}
 
 template<typename TimeT = std::chrono::milliseconds>
 struct measure
 {
 	template<typename F, typename RetType, typename ...Args>
-	static typename TimeT::rep execution(F&& func, RetType& retVal, Args&&... args)
+	static typename TimeT::rep execution(F&& Search, RetType& index_found, Args&&... args)
 	{
-		auto start = std::chrono::steady_clock::now();
-		retVal = std::forward<decltype(func)>(func)(std::forward<Args>(args)...);
+		auto start = std::chrono::high_resolution_clock::now();
+		
+		// call Search()
+		index_found = std::forward<decltype(Search)>(Search)(std::forward<Args>(args)...);
+		
 		auto duration = std::chrono::duration_cast<TimeT>
-			(std::chrono::steady_clock::now() - start);
+			(std::chrono::high_resolution_clock::now() - start);
+
 		return duration.count();
 	}
 };
+#else
+struct measure
+{
+	template<typename F, typename RetType, typename ...Args>
+	static double execution(F&& Search, RetType& index_found, Args&&... args)
+	{
+		const double start = omp_get_wtime();
+
+		// call Search()
+		index_found = std::forward<decltype(Search)>(Search)(std::forward<Args>(args)...);
+		
+		const double duration = omp_get_wtime() - start;
+		
+		return duration;
+	}
+};
+#endif
+
+/* wrapper classes for each Search Algorithm so there will exist a unique Test<>()
+	instance for each of them so the statics inside Test won't be shared between instances. */
+template<typename VecType, typename VecSizeT/* = unsigned long long*/>
+struct BinarySearchT
+{
+	static inline const char* prettyName = "Binary Search";
+
+	static VecSizeT Search(const std::vector<VecType>& arr, VecType val)
+	{
+		return SearchAlgorithms::BinarySearch<VecType, VecSizeT>(arr, val);
+	}
+};
+
+template<typename VecType, typename VecSizeT/* = unsigned long long*/>
+struct ParallelSearch1T
+{
+	static inline const char* prettyName = "Parallel Search1";
+
+	static VecSizeT Search(const std::vector<VecType>& arr, VecType val)
+	{
+		return SearchAlgorithms::ParallelSearch1<VecType, VecSizeT>(arr, val);
+	}
+};
+
+template< template<typename, typename> class SearchT,
+	typename VecType, typename VecSizeT/* = unsigned long long*/>
+VecSizeT Test(const std::vector<VecType>& arr, const VecType& val)
+{
+	static double avg_duration = 0.;
+	static unsigned calls_count = 0;
+
+	VecSizeT index_found;
+
+#ifdef USING_CHRONO_TO_MEASURE_DURATION
+	const double duration = measure<std::chrono::duration<double>>::execution(
+		SearchT<VecType, VecSizeT>::Search, index_found, arr, val);
+#else
+	const double duration = measure::execution(
+		SearchT<VecType, VecSizeT>::Search, index_found, arr, val);
+#endif
+
+	avg_duration = ((avg_duration * calls_count) + duration) / (calls_count + 1);
+	calls_count++;
+
+	printf("%.15s found it at:\t%lu\tin: %.9f seconds\tavg : %.9f\n",
+		SearchT<VecType, VecSizeT>::prettyName, index_found, duration, avg_duration);
+
+	return index_found;
+}
 
 int main(int argc, char *argv[])
 {
-	using VecType = unsigned long long;
-	using VecSizeT = unsigned long long;
-	std::vector<VecType> arr(N);
-	for (VecSizeT i = 0; i < N; i++)
+	using VecType = unsigned long;
+	using VecSizeT = unsigned long;
+	constexpr VecSizeT N = 2'000'000;
+
+	// Create Sorted vector of form: {0, 1, 2, ..., N-1}
+	std::vector<VecType> sortedVec(N);
+	std::iota(sortedVec.begin(), sortedVec.end(), 0);	// or the plain code:
+	//VecSizeT i = 0;
+	//for (auto it = sortedVec.begin(), end = sortedVec.end(); it != end; ++it)
+	//{
+	//	*it = i++;
+	//}
+
+	// Create generator to generate random numbers between [0, N)
+	std::uniform_int_distribution<VecType> distrib(0, N);
+	std::default_random_engine engine(/*seed = */ 5768);
+	auto generator = std::bind(distrib, engine);	// or get random value by calling distrib(engine)
+
+	const VecSizeT nrTests = N;
+	for (VecSizeT i = 0; i < nrTests; i++)
 	{
-		arr[i] = i;
-	}
-
-	VecSizeT b_index, p_index;
-	VecType test_value;
-
-	srand(42);
-
-	for (VecSizeT i = 0; i < N; i++)
-	{
-		VecType rand_value = rand() % RAND_MAX;
-
-		test_value = rand_value;
-		printf("searching for: %lld\n", test_value);
+		const VecType test_value = generator();
+		std::cout << "Searching for: " << test_value << "\n";
 
 		// binary search (just for reference)
-		{
-			auto duration = measure<std::chrono::nanoseconds>::execution(
-				binarySearch<VecType, VecSizeT>, b_index, arr, test_value);
-			printf("binarySearch time taken: %lld ns\n", duration);
-			printf("found at pos: %lld\n", b_index);
-		}
-
+		const VecSizeT b_index = Test<BinarySearchT, VecType, VecSizeT>(sortedVec, test_value);
+		
 		// parallel search
-		{
-			//omp_set_num_threads(2);
-			auto duration = measure<std::chrono::nanoseconds>::execution(
-				parallelSearch<VecType, VecSizeT>, p_index, arr, test_value);
-			printf("parallelSearch time taken: %lld ns\n", duration);
-			printf("found at pos: %lld\n", p_index);
-		}
+		const VecSizeT p_index = Test<ParallelSearch1T, VecType, VecSizeT>(sortedVec, test_value);
 
 		if (b_index != p_index)
 		{
 			break;
 		}
 
-		printf("\n");
-
-	//	system("cls");
+		std::cout << "\n";
 	}
 
-	system("pause");
+	system("pause");	// Adds a "Press any key.." to your console
 	return 0;
 }
