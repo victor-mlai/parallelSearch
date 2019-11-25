@@ -1,9 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 
-#include <omp.h>
-#include <time.h>
 #include <vector>
-#include <array>
 #include <iostream>
 #include <random>	// used to generate random values to be searched
 #include <functional>	// std::bind
@@ -17,16 +14,17 @@
 
 #include <chrono>
 
+// measures the execution time of a function
 template<typename TimeT = std::chrono::milliseconds>
 struct measure
 {
-	template<typename F, typename RetType, typename ...Args>
-	static typename TimeT::rep execution(F&& Search, RetType& index_found, Args&&... args)
+	template<class F, typename RetType, typename ...Args>
+	static typename TimeT::rep execution(F func, RetType& index_found, Args&&... args)
 	{
 		auto start = std::chrono::high_resolution_clock::now();
 		
 		// call Search()
-		index_found = std::forward<decltype(Search)>(Search)(std::forward<Args>(args)...);
+		index_found = std::forward<decltype(func)>(func)(std::forward<Args>(args)...);
 		
 		auto duration = std::chrono::duration_cast<TimeT>
 			(std::chrono::high_resolution_clock::now() - start);
@@ -35,15 +33,16 @@ struct measure
 	}
 };
 #else
+// measures the execution time of a function
 struct measure
 {
-	template<typename F, typename RetType, typename ...Args>
-	static double execution(F&& Search, RetType& index_found, Args&&... args)
+	template<class F, typename RetType, typename ...Args>
+	static double execution(F func, RetType& index_found, Args&&... args)
 	{
 		const double start = omp_get_wtime();
 
 		// call Search()
-		index_found = std::forward<decltype(Search)>(Search)(std::forward<Args>(args)...);
+		index_found = std::forward<decltype(func)>(func)(std::forward<Args>(args)...);
 		
 		const double duration = omp_get_wtime() - start;
 		
@@ -54,34 +53,61 @@ struct measure
 
 /* wrapper classes for each Search Algorithm so there will exist a unique Test<>()
 	instance for each of them so the statics inside Test won't be shared between instances. */
-template<typename VecType, typename VecSizeT/* = unsigned long long*/>
+//vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
+struct ParallelSearchT
+{
+	static inline const char* prettyName = "Parallel Search";
+
+	static VecSizeT Search(const std::vector<VecType>& arr, VecType val)
+	{
+		return SearchAlgorithms::ParallelSearch(arr, val);
+	}
+};
+
+template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
+struct ShorterParallelSearchT
+{
+	static inline const char* prettyName = "Shorter Par Search";
+
+	static VecSizeT Search(const std::vector<VecType>& arr, VecType val)
+	{
+		return SearchAlgorithms::ShorterParallelSearch(arr, val);
+	}
+};
+
+template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
 struct BinarySearchT
 {
 	static inline const char* prettyName = "Binary Search";
 
 	static VecSizeT Search(const std::vector<VecType>& arr, VecType val)
 	{
-		return SearchAlgorithms::BinarySearch<VecType, VecSizeT>(arr, val);
+		return SearchAlgorithms::BinarySearch(arr, val);
 	}
 };
 
-template<typename VecType, typename VecSizeT/* = unsigned long long*/>
-struct ParallelSearch1T
+template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
+struct BinarySearchInParallelT
 {
-	static inline const char* prettyName = "Parallel Search1";
+	static inline const char* prettyName = "Bin Search In Par";
 
 	static VecSizeT Search(const std::vector<VecType>& arr, VecType val)
 	{
-		return SearchAlgorithms::ParallelSearch1<VecType, VecSizeT>(arr, val);
+		return SearchAlgorithms::BinarySearchInParallel(arr, val);
 	}
 };
+//^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+/* Receives a wrapper class for each algorithm type as template parameter of form:
+template<typename VecType, typename VecSizeT> such that the compiler will create an unique
+instance of this function so the statics inside Test won't be shared between instances. */
 template< template<typename, typename> class SearchT,
-	typename VecType, typename VecSizeT/* = unsigned long long*/>
+	typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
 VecSizeT Test(const std::vector<VecType>& arr, const VecType& val)
 {
 	static double avg_duration = 0.;
-	static unsigned calls_count = 0;
+	static VecSizeT calls_count = 0;
 
 	VecSizeT index_found;
 
@@ -96,29 +122,26 @@ VecSizeT Test(const std::vector<VecType>& arr, const VecType& val)
 	avg_duration = ((avg_duration * calls_count) + duration) / (calls_count + 1);
 	calls_count++;
 
-	printf("%.15s found it at:\t%lu\tin: %.9f seconds\tavg : %.9f\n",
+	printf("%s found it at:\t%13.llu\tin: %.9f seconds\tavg : %.9f\n",
 		SearchT<VecType, VecSizeT>::prettyName, index_found, duration, avg_duration);
 
 	return index_found;
 }
 
-int main(int argc, char *argv[])
+int main()
 {
-	using VecType = unsigned long;
-	using VecSizeT = unsigned long;
-	constexpr VecSizeT N = 2'000'000;
+	// Modify these at your own risk
+	using VecType = long;
+	using VecSizeT = std::vector<VecType>::size_type;
+	constexpr VecSizeT N = std::numeric_limits<long>::max() - 1;//2'000'000'000;
+	constexpr VecType START_VALUE = 0;//-static_cast<VecType>(N)/2;
 
-	// Create Sorted vector of form: {0, 1, 2, ..., N-1}
+	// Create Sorted vector of form: {START_VALUE, ..., 0, 1, 2, ..., START_VALUE + N-1}
 	std::vector<VecType> sortedVec(N);
-	std::iota(sortedVec.begin(), sortedVec.end(), 0);	// or the plain code:
-	//VecSizeT i = 0;
-	//for (auto it = sortedVec.begin(), end = sortedVec.end(); it != end; ++it)
-	//{
-	//	*it = i++;
-	//}
+	std::iota(sortedVec.begin(), sortedVec.end(), START_VALUE);
 
-	// Create generator to generate random numbers between [0, N)
-	std::uniform_int_distribution<VecType> distrib(0, N);
+	// Create generator to generate random numbers between [START_VALUE, START_VALUE + N)
+	std::uniform_int_distribution<VecType> distrib(START_VALUE, START_VALUE + static_cast<VecType>(N));
 	std::default_random_engine engine(/*seed = */ 5768);
 	auto generator = std::bind(distrib, engine);	// or get random value by calling distrib(engine)
 
@@ -129,12 +152,19 @@ int main(int argc, char *argv[])
 		std::cout << "Searching for: " << test_value << "\n";
 
 		// binary search (just for reference)
-		const VecSizeT b_index = Test<BinarySearchT, VecType, VecSizeT>(sortedVec, test_value);
-		
-		// parallel search
-		const VecSizeT p_index = Test<ParallelSearch1T, VecType, VecSizeT>(sortedVec, test_value);
+		const VecSizeT b_index = Test<BinarySearchT, VecType>(sortedVec, test_value);
 
-		if (b_index != p_index)
+		// parallel search
+		const VecSizeT p_index = Test<ParallelSearchT, VecType>(sortedVec, test_value);
+
+		// parallel search improved??
+		const VecSizeT i_index = Test<ShorterParallelSearchT, VecType>(sortedVec, test_value);
+
+		// binary search in parallel (just curious)
+		const VecSizeT bp_index = Test<BinarySearchInParallelT, VecType>(sortedVec, test_value);
+
+		// if one of the algorithms returns a different index then stop
+		if (b_index != p_index || p_index != i_index || i_index != bp_index)
 		{
 			break;
 		}

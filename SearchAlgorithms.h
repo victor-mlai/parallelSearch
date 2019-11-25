@@ -1,62 +1,62 @@
 #pragma once
+
 #include <vector>
+#include <omp.h>
+#include <array>
 
 namespace SearchAlgorithms
 {
-	
-constexpr unsigned int THREAD_COUNT = 4;
+
+constexpr unsigned MAX_THREAD_COUNT = 64;
 using Shbool = short;	// my reference-able bool
 
 /*
 val = 7
-                     P1               P2         
-arr = 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14
-c = right            ?                ?           left
+sortedVec = 0  1  2  3  4  5  6  7  8  9  10 11 12 13 14
 
-			       P1 P2 
-directions = right  ?  ?  left
+15 elements divided to 4 threads => segmSize = 3
 
-after the first while:
-					 P1               P2
-arr = 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14
-c = right            right            left        left
-                     ^                ^
-   					these 2 are different
-thrdPos[P1] = 6
-thrdPos[P2] = 11
-=> l = 6, r = 10;
+Each thread checks if "val" is to their right
+            T0       T1       T2       T3                RB (Right-Border)
+sortedVec = 0  1  2  3  4  5  6  7  8  9  10 11 12 13 14
+isValRght = V        V        V        X                 X
 
-	     P1       P2 
-arr = 6  7  8  9  10 11
+T2 sees that val is to his right and T3 says it's not, so it shrinks the search interval
+=> l = 6, r = 8; => segmSize = 0 => exit while loop
 
-=> P1 will find the value at index 7
+            T0 T1 T2
+sortedVec = 6  7  8
+
+=> T1 will find the value at index 7
 */
-template<typename VecType, typename VecSizeT/* = unsigned long long*/>
-VecSizeT ParallelSearch(const std::vector<VecType>& arr, const VecType& val)
+template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
+VecSizeT ShorterParallelSearch(const std::vector<VecType>& sortedVec, const VecType& val)
 {
-	VecSizeT l = 0;	// left most index
-	VecSizeT r = arr.size() - 1; // right most index
-
-	//const VecSizeT threadCount = omp_get_max_threads();
-	constexpr unsigned int lastThrdID = THREAD_COUNT - 1;
+	const unsigned threadCount = omp_get_max_threads();
+	const unsigned lastThrdID = threadCount - 1;
 
 	// each thread will tell if "val" is to their "right"
-	std::array<Shbool, THREAD_COUNT + 1> isValToTheRight; // + 1 <=> the right border
-	isValToTheRight.back() = false;	// last one will say no every time
+	std::array<Shbool, MAX_THREAD_COUNT+1> isValToTheRight; // + 1 <=> the right border which is just queried by the last thread
+	isValToTheRight[threadCount] = false;	// the right border will say "false" every time
 
-	VecSizeT segm_size = (r - l + 1) / (THREAD_COUNT + 1);
-	
-	#pragma omp parallel default(none) shared(l, r, arr, segm_size, val, isValToTheRight)
+	VecSizeT l = 0;	// left most index
+	VecSizeT r = sortedVec.size() - 1; // right most index
+	VecSizeT indexFound = -1;
+
+	#pragma omp parallel \
+		shared(sortedVec, val, l, r, isValToTheRight, indexFound) \
+		default(none)	// compile error if a local variable is not mentioned in shared(...) or private(...)
 	{
 		const unsigned thrdID = omp_get_thread_num();
 
 		Shbool& currThrdSaysItsRight = isValToTheRight[thrdID];
-  const Shbool& nextThrdSaysItsRight = isValToTheRight[thrdID + 1];
+		const Shbool& nextThrdSaysItsRight = isValToTheRight[thrdID + 1];
 
-		while (l < r)
+		while (l <= r - threadCount)
 		{
-			const VecSizeT currThrdPos = l + segm_size * thrdID + 1;
-			currThrdSaysItsRight = arr[currThrdPos] <= val;
+			const VecSizeT segmSize = (r - l + 1) / (threadCount + 1) + 1;
+			const VecSizeT currThrdPos = l + segmSize * thrdID;
+			currThrdSaysItsRight = (sortedVec[currThrdPos] <= val);
 
 			// waiting for every thread to finish checking if "val" is on their right
 			#pragma omp barrier
@@ -65,65 +65,75 @@ VecSizeT ParallelSearch(const std::vector<VecType>& arr, const VecType& val)
 			{
 				l = currThrdPos;
 				if (thrdID != lastThrdID)
-					r = currThrdPos + segm_size - 1;
-
-				segm_size = (r - l + 1) / (THREAD_COUNT + 1);
+					r = currThrdPos + segmSize - 1;
 			}
 
 			#pragma omp barrier
 		}
+
+		const VecSizeT currThrdPos = l + thrdID;
+		if (currThrdPos <= r && sortedVec[currThrdPos] == val)
+			indexFound = currThrdPos;
 	}
 
-	// now l == r
-
-	// if "val" should've been here but it isn't
-	if (arr[l] != val)
-		return -1;
-
-	return l;
+	return indexFound;
 }
 
-template<typename VecType, typename VecSizeT/* = unsigned long long*/>
-VecSizeT BinarySearchInParallel(const std::vector<VecType>& arr, const VecType& val)
-{
+/* ! In this version, threads look left and there is 1 more segment
+val = 8
+sortedVec = 0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17
 
-}
+18 elements divided to (4 threads + 1) segments => segmSize = 3 + 1 = 4
 
-template<typename VecType, typename VecSizeT/* = unsigned long long*/>
-VecSizeT ParallelSearch1(const std::vector<VecType>& arr, const VecType& val)
+Each thread checks if "val" is to their right and then check the result with their previous thread
+         LB(LeftBorder)  T0          T1          T2          T3
+sortedVec =     0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17
+isValRght = V            V           V           X           X
+                                     ^           ^
+					             these 2 are different
+after the first while:
+             LB T0 T1 T2 T3
+sortedVec = ... 7  8  9  10 ...
+isValRght =  V  V  V  X  X
+
+=> T2 modifies l = 8, r = 8 so "val" must be at the index 8
+*/
+template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
+VecSizeT ParallelSearch(const std::vector<VecType>& sortedVec, const VecType& val)
 {
+	const unsigned threadCount = omp_get_max_threads();
+	const unsigned firstThrdID = 0;
+
+	// each thread will tell if "val" is to their "right"
+	std::array<Shbool, MAX_THREAD_COUNT + 1> isValToTheRight; // + 1 <=> the left border
+	isValToTheRight[0] = true;	// the left border will say "true" every time
+
+	std::array<VecSizeT, MAX_THREAD_COUNT> thrdsPos;	// position for each thread
+
 	VecSizeT l = 0;	// left most index
-	VecSizeT r = arr.size() - 1; // right most index
+	VecSizeT r = sortedVec.size() - 1; // right most index
 
-	//VecSizeT threadCount = omp_get_max_threads();
-
-	// each thread will tell if "val" is to their "left" or to their "right"
-	std::array<Shbool, THREAD_COUNT + 2> isValToTheRight; // + 2 <=> the 2 borders
-	isValToTheRight.front() = true;
-	isValToTheRight.back() = false;
-
-	std::array<VecSizeT, THREAD_COUNT> thrdsPos;	// position for each thread
-
-	#pragma omp parallel default(none) shared(l, r, thrdsPos, isValToTheRight, arr, val)
+	#pragma omp parallel \
+		shared(l, r, thrdsPos, isValToTheRight, sortedVec, val) \
+		default(none)	// compile error if a local variable is not mentioned in shared(...) or private(...)
 	{
 		const unsigned thrdID = omp_get_thread_num();
 		VecSizeT& currThrdPos = thrdsPos[thrdID];
 		Shbool& currThrdSaysItsRight = isValToTheRight[thrdID + 1];
 		const Shbool& prevThrdSaysItsRight = isValToTheRight[thrdID];
-		const Shbool& nextThrdSaysItsRight = isValToTheRight[thrdID + 2];
 
 		while (l < r)
 		{
-			const VecSizeT segm_size = (r - l + 1) / (THREAD_COUNT + 1) + 1;
-			currThrdPos = l + segm_size * (thrdID + 1) - 1;
-			currThrdSaysItsRight = (arr[currThrdPos] <= val);
+			const VecSizeT segmSize = (r - l + 1) / (threadCount + 1) + 1;
+			currThrdPos = l + segmSize * (thrdID + 1) - 1;
+			currThrdSaysItsRight = (sortedVec[currThrdPos] <= val);
 
 			#pragma omp barrier
 
 			if (currThrdSaysItsRight != prevThrdSaysItsRight)
 			{
 				r = currThrdPos - 1;
-				if (thrdID != 0)
+				if (thrdID != firstThrdID)
 				{
 					l = thrdsPos[thrdID - 1];
 				}
@@ -131,9 +141,10 @@ VecSizeT ParallelSearch1(const std::vector<VecType>& arr, const VecType& val)
 
 			#pragma omp single
 			{
-				if (isValToTheRight[THREAD_COUNT] != isValToTheRight[THREAD_COUNT + 1])
+				// no thread looked at this segment so one needs to check whether val is in the last segment
+				if (isValToTheRight[threadCount])
 				{
-					l = thrdsPos.back();
+					l = thrdsPos[threadCount-1];
 				}
 			}
 		}
@@ -142,20 +153,20 @@ VecSizeT ParallelSearch1(const std::vector<VecType>& arr, const VecType& val)
 	// now l == r
 
 	// if "val" should've been here but it isn't
-	if (arr[l] != val)
-		return -1;
+	if (sortedVec[l] != val)
+		return VecSizeT(-1);
 
 	return l;
 }
 
-template<typename VecType, typename VecSizeT/* = unsigned long long*/>
-VecSizeT BinarySearch(const std::vector<VecType>& arr, VecType val)
+template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
+VecSizeT BinarySearch(const std::vector<VecType>& sortedVec, VecType val)
 {
-	VecSizeT l = 0, r = arr.size() - 1, m;
+	VecSizeT l = 0, r = sortedVec.size() - 1, m;
 	while (l < r)
 	{
 		m = l + (r - l) / 2 + 1;
-		if (arr[m] <= val)
+		if (sortedVec[m] <= val)
 		{
 			l = m;
 		}
@@ -168,10 +179,63 @@ VecSizeT BinarySearch(const std::vector<VecType>& arr, VecType val)
 	// now l == r
 
 	// if "val" should've been here but it isn't
-	if (arr[l] != val)
-		return -1;
+	if (sortedVec[l] != val)
+		return VecSizeT(-1);
 
 	return l;
+}
+
+template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
+VecSizeT BinarySearchInParallel(const std::vector<VecType>& sortedVec, const VecType& val)
+{
+	VecSizeT idxFound = -1;
+	const unsigned threadCount = omp_get_max_threads();
+	const VecSizeT vecSize = sortedVec.size();
+
+	if (vecSize <= threadCount)
+	{
+		#pragma omp parallel shared(idxFound)
+		{
+			const unsigned thrdID = omp_get_thread_num();
+			if (thrdID < vecSize && sortedVec[thrdID] == val)
+				idxFound = thrdID;
+		}
+
+		return idxFound;
+	}
+
+	#pragma omp parallel
+	{
+		const unsigned thrdID = omp_get_thread_num();
+		VecSizeT segmSize = vecSize / threadCount;
+		VecSizeT l = segmSize * thrdID;
+		VecSizeT r = segmSize * (thrdID + 1);
+
+		if (thrdID == threadCount - 1)	// last thread gets a little more work
+		{
+			segmSize += vecSize % threadCount;
+			l = vecSize - segmSize;
+			r = vecSize - 1;
+		}
+
+		while (l < r)
+		{
+			const VecSizeT m = l + (r - l) / 2 + 1;
+			if (sortedVec[m] <= val)
+			{
+				l = m;
+			}
+			else
+			{
+				r = m - 1;
+			}
+		}
+
+		if (sortedVec[l] == val)
+			idxFound = l;
+	}
+	
+	return idxFound;
 }
 
 }
