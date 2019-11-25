@@ -14,8 +14,8 @@
 
 #include <chrono>
 
-// measures the execution time of a function
-template<typename TimeT = std::chrono::milliseconds>
+// measures the execution duration of a function using std::chrono
+template<typename TimeT = std::chrono::duration<double>>
 struct measure
 {
 	template<class F, typename RetType, typename ...Args>
@@ -33,7 +33,7 @@ struct measure
 	}
 };
 #else
-// measures the execution time of a function
+// measures the execution duration of a function using omp_get_wtime()
 struct measure
 {
 	template<class F, typename RetType, typename ...Args>
@@ -112,7 +112,7 @@ VecSizeT Test(const std::vector<VecType>& arr, const VecType& val)
 	VecSizeT index_found;
 
 #ifdef USING_CHRONO_TO_MEASURE_DURATION
-	const double duration = measure<std::chrono::duration<double>>::execution(
+	const double duration = measure<>::execution(
 		SearchT<VecType, VecSizeT>::Search, index_found, arr, val);
 #else
 	const double duration = measure::execution(
