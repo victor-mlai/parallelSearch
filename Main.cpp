@@ -1,4 +1,4 @@
-#define _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS	// used so VS will let me use printf peacefully...
 
 #include <vector>
 #include <iostream>
@@ -55,6 +55,30 @@ struct measure
 	instance for each of them so the statics inside Test won't be shared between instances. */
 //vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
+struct BinarySearchT
+{
+	static inline const char* prettyName = "Binary Search";
+
+	static VecSizeT Search(const std::vector<VecType>& arr, VecType val)
+	{
+		return SearchAlgorithms::BinarySearch(arr, val);
+	}
+};
+
+template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
+struct LowerBoundT
+{
+	static inline const char* prettyName = "Lower Bound";
+
+	static VecSizeT Search(const std::vector<VecType>& arr, VecType val)
+	{
+		return std::distance(
+			arr.begin(),
+			std::lower_bound(arr.begin(), arr.end(), val));
+	}
+};
+
+template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
 struct ParallelSearchT
 {
 	static inline const char* prettyName = "Parallel Search";
@@ -73,17 +97,6 @@ struct ShorterParallelSearchT
 	static VecSizeT Search(const std::vector<VecType>& arr, VecType val)
 	{
 		return SearchAlgorithms::ShorterParallelSearch(arr, val);
-	}
-};
-
-template<typename VecType, typename VecSizeT = std::vector<VecType>::size_type>
-struct BinarySearchT
-{
-	static inline const char* prettyName = "Binary Search";
-
-	static VecSizeT Search(const std::vector<VecType>& arr, VecType val)
-	{
-		return SearchAlgorithms::BinarySearch(arr, val);
 	}
 };
 
@@ -122,7 +135,7 @@ VecSizeT Test(const std::vector<VecType>& arr, const VecType& val)
 	avg_duration = ((avg_duration * calls_count) + duration) / (calls_count + 1);
 	calls_count++;
 
-	printf("%s found it at:\t%13.llu\tin: %.9f seconds\tavg : %.9f\n",
+	printf("%20.20s  |  %12.llu  |  %.9f  |  %.9f\n",
 		SearchT<VecType, VecSizeT>::prettyName, index_found, duration, avg_duration);
 
 	return index_found;
@@ -130,10 +143,10 @@ VecSizeT Test(const std::vector<VecType>& arr, const VecType& val)
 
 int main()
 {
-	// Modify these at your own risk
-	using VecType = long;
+	// These settings take ~12GB of your RAM (N*sizeof(VecType))
+	using VecType = unsigned long;
 	using VecSizeT = std::vector<VecType>::size_type;
-	constexpr VecSizeT N = std::numeric_limits<long>::max() - 1;//2'000'000'000;
+	constexpr VecSizeT N = 1'000'000'000ul;// std::numeric_limits<unsigned long>::max() - 1; // ~4'000'000'000;
 	constexpr VecType START_VALUE = 0;//-static_cast<VecType>(N)/2;
 
 	// Create Sorted vector of form: {START_VALUE, ..., 0, 1, 2, ..., START_VALUE + N-1}
@@ -149,10 +162,13 @@ int main()
 	for (VecSizeT i = 0; i < nrTests; i++)
 	{
 		const VecType test_value = generator();
-		std::cout << "Searching for: " << test_value << "\n";
+		printf("Searching for: %12.lu | found at |    in    (seconds)   avg\n", test_value);
 
-		// binary search (just for reference)
+		// binary search
 		const VecSizeT b_index = Test<BinarySearchT, VecType>(sortedVec, test_value);
+
+		// std::lower_bound
+		const VecSizeT lb_index = Test<LowerBoundT, VecType>(sortedVec, test_value);
 
 		// parallel search
 		const VecSizeT p_index = Test<ParallelSearchT, VecType>(sortedVec, test_value);
@@ -164,7 +180,7 @@ int main()
 		const VecSizeT bp_index = Test<BinarySearchInParallelT, VecType>(sortedVec, test_value);
 
 		// if one of the algorithms returns a different index then stop
-		if (b_index != p_index || p_index != i_index || i_index != bp_index)
+		if (b_index != p_index || p_index != i_index || i_index != bp_index || bp_index != lb_index)
 		{
 			break;
 		}
